@@ -22,11 +22,11 @@ local function merger(read, scan)
   local parts = {}
 
   -- Return a new read function that combines chunks smartly
-  return function ()
-
+  return function (timeout)
     while true do
       -- Read the next event from upstream.
-      local chunk = read()
+      local chunk,err = read(timeout)
+      if err == "timeout" then return nil, err end --pass timeout up the chain
 
       -- We got an EOS (end of stream)
       if not chunk then
@@ -71,12 +71,13 @@ end
 local function decoder(read, decode)
   local buffer, index
   local want = true
-  return function ()
-
+  return function (timeout)
+    
     while true do
       -- If there isn't enough data to decode then get more data.
       if want then
-        local chunk = read()
+        local chunk, err = read(timeout)
+        if err == "timeout" then return nil, err end --pass the timeout up the chain
         if buffer then
           -- If we had leftover data in the old buffer, trim it down.
           if index > 1 then

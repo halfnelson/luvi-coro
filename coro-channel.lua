@@ -9,6 +9,7 @@
 ]]
 
 -- local p = require('pretty-print').prettyPrint
+local uv = require('uv')
 
 local function makeCloser(socket)
   local closer = {
@@ -50,11 +51,12 @@ local function makeRead(socket, closer)
   local queue = {}
   local tindex = 0
   local dindex = 0
+  local timer
 
   local function dispatch(data)
 
     -- p("<-", data[1])
-
+    
     if tindex > dindex then
       local thread = queue[dindex]
       queue[dindex] = nil
@@ -78,6 +80,10 @@ local function makeRead(socket, closer)
   end
 
   local function onRead(err, chunk)
+    if timer then 
+      timer:close() 
+      timer = false
+    end --we didn't time out!
     if err then
       closer.errored = err
       return closer.check()
@@ -91,7 +97,8 @@ local function makeRead(socket, closer)
     return dispatch {chunk}
   end
 
-  local function read()
+  local function read(timeout)
+    
     if dindex > tindex then
       local data = queue[tindex]
       queue[tindex] = nil
@@ -102,11 +109,27 @@ local function makeRead(socket, closer)
       paused = false
       assert(socket:read_start(onRead))
     end
+    local lastCoroIdx = tindex
     queue[tindex] = coroutine.running()
     tindex = tindex + 1
+    timer = false
+    if timeout and (timeout >= 0) then
+      timer = uv.new_timer()
+      timer:start(timeout, 0, function ()
+        if not timer then return end --we didn't beat the read callback so do nothing
+        timer:close()
+        timer = false
+        --pretend we received the data so if an onRead lands, we don't try to resume same coro twice
+        local thread = queue[lastCoroIdx]
+        queue[lastCoroIdx] = nil
+        dindex = dindex + 1
+        return assert(coroutine.resume(thread, nil, "timeout"))
+      end)
+    end
+   
     return coroutine.yield()
   end
-
+ 
   -- Auto use wrapper library for backwards compat
   return read
 end
